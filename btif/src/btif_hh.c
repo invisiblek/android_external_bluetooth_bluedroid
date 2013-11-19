@@ -697,6 +697,21 @@ bt_status_t btif_hh_connect(bt_bdaddr_t *bd_addr)
 
 /*******************************************************************************
 **
+** Function         btif_hh_check_if_conn_in_prog
+**
+** Description      connection initiated from the BTIF thread context
+**
+** Returns          int status
+**
+*******************************************************************************/
+
+BOOLEAN btif_hh_check_if_conn_in_prog(void)
+{
+    return (btif_hh_cb.status == BTIF_HH_DEV_CONNECTING);
+}
+
+/*******************************************************************************
+**
 ** Function         btif_hh_disconnect
 **
 ** Description      disconnection initiated from the BTIF thread context
@@ -791,6 +806,22 @@ static int btif_hh_check_if_device_connectable(BD_ADDR bda)
     return TRUE;
 }
 
+/*******************************************************************************
+**
+** Function         btif_hh_sdp_cmpl_after_bonding
+**
+** Description      Sends signal to BTA layer that SDP is finished after bonding in stack
+**
+** Returns          void
+**
+*******************************************************************************/
+
+void btif_hh_sdp_cmpl_after_bonding(bt_bdaddr_t bdaddr)
+{
+    BD_ADDR bd_addr;
+    memcpy(bd_addr, &bdaddr, BD_ADDR_LEN);
+    BTA_HhSdpCmplAfterBonding(bd_addr);
+}
 
 /*****************************************************************************
 **   Section name (Group of functions)
