@@ -50,6 +50,8 @@
 /******************************************************************************
 **  Constants & Macros
 ******************************************************************************/
+#define BTIF_DM_GET_REMOTE_PROP(b,t,v,l,p) \
+      {p.type=t;p.val=v;p.len=l;btif_storage_get_remote_device_property(b,&p);}
 
 #define COD_UNCLASSIFIED ((0x1F) << 8)
 #define COD_HID_KEYBOARD                    0x0540
@@ -304,6 +306,7 @@ BOOLEAN check_cod(const bt_bdaddr_t *remote_bdaddr, uint32_t cod)
                                sizeof(uint32_t), &remote_cod);
     if (btif_storage_get_remote_device_property((bt_bdaddr_t *)remote_bdaddr, &prop_name) == BT_STATUS_SUCCESS)
     {
+        BTIF_TRACE_ERROR2("%s: remote_cod = 0x%06x", __FUNCTION__, remote_cod);
         if ((remote_cod & 0x7ff) == cod)
             return TRUE;
     }
@@ -322,6 +325,7 @@ BOOLEAN check_cod_hid(const bt_bdaddr_t *remote_bdaddr, uint32_t cod)
     if (btif_storage_get_remote_device_property((bt_bdaddr_t *)remote_bdaddr,
                                 &prop_name) == BT_STATUS_SUCCESS)
     {
+        BTIF_TRACE_DEBUG2("%s: remote_cod = 0x%06x", __FUNCTION__, remote_cod);
         if ((remote_cod & 0x700) == cod)
             return TRUE;
     }
@@ -369,7 +373,7 @@ static void bond_state_changed(bt_status_t status, bt_bdaddr_t *bd_addr, bt_bond
         pairing_cb.state = state;
         bdcpy(pairing_cb.bd_addr, bd_addr->address);
     }
-    else
+    else if (bdcmp(pairing_cb.bd_addr, bd_addr->address) == 0)
     {
         memset(&pairing_cb, 0, sizeof(pairing_cb));
     }
@@ -436,9 +440,18 @@ static void btif_update_remote_properties(BD_ADDR bd_addr, BD_NAME bd_name,
 
     /* class of device */
     cod = devclass2uint(dev_class);
+    BTIF_TRACE_DEBUG2("%s():cod is 0x%06x", __FUNCTION__, cod);
     if ( cod == 0) {
-        BTIF_TRACE_DEBUG1("%s():cod is 0, set as unclassified", __FUNCTION__);
-        cod = COD_UNCLASSIFIED;
+       /* Try to retrieve cod from storage */
+        BTIF_TRACE_DEBUG1("%s():cod is 0, checking cod from storage", __FUNCTION__);
+        BTIF_STORAGE_FILL_PROPERTY(&properties[num_properties],
+            BT_PROPERTY_CLASS_OF_DEVICE, sizeof(cod), &cod);
+        status = btif_storage_get_remote_device_property(&bdaddr, &properties[num_properties]);
+        BTIF_TRACE_DEBUG2("%s():cod retreived from storage is 0x%06x", __FUNCTION__, cod);
+        if ( cod == 0) {
+            BTIF_TRACE_DEBUG1("%s():cod is again 0, set as unclassified", __FUNCTION__);
+            cod = COD_UNCLASSIFIED;
+        }
     }
 
     BTIF_STORAGE_FILL_PROPERTY(&properties[num_properties],
@@ -519,8 +532,6 @@ static void btif_dm_cb_hid_remote_name(tBTM_REMOTE_DEV_NAME *p_remote_name)
             /* Trigger SDP on the device */
             pairing_cb.sdp_attempts = 1;
             btif_dm_get_remote_services(&remote_bd);
-            /* Store Device as bonded in nvram */
-            btif_storage_add_bonded_device(&remote_bd, NULL, 0, 0);
         }
         else
             bond_state_changed(BT_STATUS_FAIL, &remote_bd, BT_BOND_STATE_NONE);
@@ -586,8 +597,6 @@ static void btif_dm_cb_create_bond(bt_bdaddr_t *bd_addr)
                 /* Remote Name of device known, Trigger SDP on the device */
                 pairing_cb.sdp_attempts = 1;
                 btif_dm_get_remote_services(bd_addr);
-                /* Store Device as bonded in nvram */
-                btif_storage_add_bonded_device(bd_addr, NULL, 0, 0);
             }
             else
             {
@@ -629,6 +638,21 @@ static void btif_dm_cb_create_bond(bt_bdaddr_t *bd_addr)
 void btif_dm_cb_remove_bond(bt_bdaddr_t *bd_addr)
 {
      bdstr_t bdstr;
+     bt_bdname_t alias;
+     bt_property_t properties[1];
+     uint32_t num_properties = 0;
+     memset(&alias, 0, sizeof(alias));
+     BTIF_DM_GET_REMOTE_PROP(bd_addr, BT_PROPERTY_REMOTE_FRIENDLY_NAME,
+            &alias, sizeof(alias), properties[num_properties]);
+
+     if(alias.name[0] != '\0') {
+         properties[0].type = BT_PROPERTY_REMOTE_FRIENDLY_NAME;
+         properties[0].val = (void *) "";
+         properties[0].len = 1;
+
+         btif_storage_set_remote_device_property(bd_addr, &properties[0]);
+     }
+
      /*special handling for HID devices */
      /*  VUP needs to be sent if its a HID Device. The HID HOST module will check if there
      is a valid hid connection with this bd_addr. If yes VUP will be issued.*/
@@ -984,6 +1008,7 @@ static void btif_dm_auth_cmpl_evt (tBTA_DM_AUTH_CMPL *p_auth_cmpl)
 
             /* map the auth failure codes, so we can retry pairing if necessary */
             case HCI_ERR_AUTH_FAILURE:
+                btif_storage_remove_bonded_device(&bd_addr);
             case HCI_ERR_HOST_REJECT_SECURITY:
             case HCI_ERR_ENCRY_MODE_NOT_ACCEPTABLE:
             case HCI_ERR_UNIT_KEY_USED:
@@ -991,7 +1016,8 @@ static void btif_dm_auth_cmpl_evt (tBTA_DM_AUTH_CMPL *p_auth_cmpl)
             case HCI_ERR_INSUFFCIENT_SECURITY:
             case HCI_ERR_PEER_USER:
             case HCI_ERR_UNSPECIFIED:
-                BTIF_TRACE_DEBUG1(" %s() Authentication fail ", __FUNCTION__);
+                BTIF_TRACE_DEBUG2(" %s() Authentication fail reason %d",
+                    __FUNCTION__, p_auth_cmpl->fail_reason);
                 if (pairing_cb.autopair_attempts  == 1)
                 {
                     BTIF_TRACE_DEBUG1("%s(): Adding device to blacklist ", __FUNCTION__);
@@ -1115,6 +1141,10 @@ static void btif_dm_search_devices_evt (UINT16 event, char *p_param)
                 UINT8 addr_type;
                 uint32_t num_properties = 0;
                 bt_status_t status;
+                bt_bdname_t alias;
+                memset(&alias, 0, sizeof(alias));
+                BTIF_DM_GET_REMOTE_PROP(&bdaddr, BT_PROPERTY_REMOTE_FRIENDLY_NAME,
+                        &alias, sizeof(alias), properties[num_properties]);
 
                 memset(properties, 0, sizeof(properties));
                 /* BD_ADDR */
@@ -1123,7 +1153,14 @@ static void btif_dm_search_devices_evt (UINT16 event, char *p_param)
                 num_properties++;
                 /* BD_NAME */
                 /* Don't send BDNAME if it is empty */
-                if (bdname.name[0])
+                /* send alias name as the name if alias name present */
+                if(alias.name[0] != '\0') {
+                    BTIF_STORAGE_FILL_PROPERTY(&properties[num_properties],
+                                               BT_PROPERTY_BDNAME,
+                                               strlen((char *)alias.name), &alias);
+                    num_properties++;
+                }
+                else if (bdname.name[0])
                 {
                     BTIF_STORAGE_FILL_PROPERTY(&properties[num_properties],
                                                BT_PROPERTY_BDNAME,
@@ -1254,23 +1291,31 @@ static void btif_dm_search_services_evt(UINT16 event, char *p_param)
                 (bdcmp(p_data->disc_res.bd_addr, pairing_cb.bd_addr) == 0)&&
                 pairing_cb.sdp_attempts > 0)
             {
-                 BTIF_TRACE_DEBUG1("%s Remote Service SDP done. Call bond_state_changed_cb BONDED",
-                                   __FUNCTION__);
-                 pairing_cb.sdp_attempts  = 0;
-                 bond_state_changed(BT_STATUS_SUCCESS, &bd_addr, BT_BOND_STATE_BONDED);
+                pairing_cb.sdp_attempts  = 0;
 
-                 /*special handling for HID devices */
-                 BOOLEAN is_hid = check_cod(&bd_addr, COD_HID_POINTING);
-                 if (is_hid)
-                 {
-                     /* Initiate HID connection for Pointing Devices */
-                     btif_hh_connect(&bd_addr);
-                 }
-                 if (check_cod_hid(&bd_addr, COD_HID_MAJOR) || hid_uuid_present)
-                 {
-                     /* Inform HID layer that SDP is complete */
-                     btif_hh_sdp_cmpl_after_bonding(bd_addr);
-                 }
+                /*special handling for HID pointing devices */
+                BOOLEAN is_hid = check_cod(&bd_addr, COD_HID_POINTING);
+                if (is_hid && p_data->disc_res.result != BTA_SUCCESS)
+                {
+                    BTIF_TRACE_DEBUG1("%s Remote Service SDP failed", __FUNCTION__);
+                    bond_state_changed(BT_STATUS_RMT_DEV_DOWN, &bd_addr, BT_BOND_STATE_NONE);
+                    break;
+                }
+
+                BTIF_TRACE_DEBUG1("%s Remote Service SDP done. Call "
+                    "bond_state_changed_cb BONDED", __FUNCTION__);
+                bond_state_changed(BT_STATUS_SUCCESS, &bd_addr, BT_BOND_STATE_BONDED);
+
+                if (is_hid)
+                {
+                    /* Store Device as bonded in nvram */
+                    btif_storage_add_bonded_device(&bd_addr, NULL, 0, 0);
+                }
+                if (check_cod_hid(&bd_addr, COD_HID_MAJOR) || hid_uuid_present)
+                {
+                    /* Inform HID layer that SDP is complete */
+                    btif_hh_sdp_cmpl_after_bonding(bd_addr);
+                }
             }
 
             if(p_data->disc_res.num_uuids != 0)

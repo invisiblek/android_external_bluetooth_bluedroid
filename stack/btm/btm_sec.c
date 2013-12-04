@@ -3593,7 +3593,11 @@ void btm_simple_pair_complete (UINT8 *p)
     if (disc)
     {
         /* simple pairing failed */
-        btm_sec_send_hci_disconnect (p_dev_rec, HCI_ERR_AUTH_FAILURE);
+        /* Avoid sending disconnect on HCI_ERR_PEER_USER */
+        if (status != HCI_ERR_PEER_USER)
+        {
+            btm_sec_send_hci_disconnect (p_dev_rec, HCI_ERR_AUTH_FAILURE);
+        }
     }
 }
 
@@ -3756,6 +3760,7 @@ void btm_sec_auth_complete (UINT16 handle, UINT8 status)
     /* for random timeout because only slave should receive the result */
     if ((status == HCI_ERR_LMP_ERR_TRANS_COLLISION) || (status == HCI_ERR_DIFF_TRANSACTION_COLLISION))
     {
+        btm_sec_change_pairing_state (BTM_PAIR_STATE_WAIT_PIN_REQ);
         btm_sec_auth_collision(handle);
         return;
     }
@@ -4590,6 +4595,14 @@ void btm_sec_link_key_notification (UINT8 *p_bda, UINT8 *p_link_key, UINT8 key_t
             (*btm_cb.api.p_auth_complete_callback) (p_dev_rec->bd_addr, p_dev_rec->dev_class,
                                                     p_dev_rec->sec_bd_name, HCI_SUCCESS);
     }
+
+#ifdef PORCHE_PAIRING_CONFLICT
+    if(btm_cb.pin_code_len_saved)
+    {
+        BTM_TRACE_EVENT0 ("btm_sec_link_key_notification: clearing btm_cb.pin_code_len_saved");
+        btm_cb.pin_code_len_saved = 0;
+    }
+#endif
 
     /* We will save link key only if the user authorized it - BTE report link key in all cases */
 #ifdef BRCM_NONE_BTE
