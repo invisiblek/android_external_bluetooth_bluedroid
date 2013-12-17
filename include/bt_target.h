@@ -84,6 +84,10 @@
 #define BLUETOOTH_QCOM_SW TRUE
 #endif
 
+#ifndef BTA_BLE_SKIP_CONN_UPD
+#define BTA_BLE_SKIP_CONN_UPD FALSE
+#endif
+
 #ifndef BTUI_OPS_FORMATS
 #define BTUI_OPS_FORMATS (BTA_OP_VCARD21_MASK | BTA_OP_ANY_MASK)
 #endif
@@ -217,9 +221,7 @@
 #define BTA_AV_VDP_INCLUDED FALSE
 #endif
 
-#ifndef BTA_AVK_INCLUDED
-#define BTA_AVK_INCLUDED FALSE
-#endif
+/* defined BTA_AVK_INCLUDED in Android.mk file based on target selected*/
 
 #ifndef BTA_PBS_INCLUDED
 #define BTA_PBS_INCLUDED FALSE
